@@ -4,9 +4,13 @@
  * See https://github.com/sytelus/HackerNewsData
  */
 
+#include <cerrno>
+#include <limits>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <ctime>
+#include <getopt.h>
 #include <string>
 
 #include "rapidjson/reader.h"
@@ -19,6 +23,9 @@
 
 using namespace std;
 using namespace rapidjson;
+
+time_t since = 0;
+time_t until = numeric_limits<time_t>::max();
 
 // Either a story or a comment
 struct Item {
@@ -42,6 +49,10 @@ void dumpItemAsEmail(const Item &item)
 {
     char datetime[100];
     time_t dt = item.created_at_i;
+    if (dt < since || dt >= until) {
+//        printd("date out of range %zu %zu %zu\n", since, dt, until);
+        return;
+    }
     if (!strftime(datetime, sizeof datetime, "%a, %d %b %Y %T %z", gmtime(&dt)))
         *datetime = '\0';
 
@@ -201,8 +212,71 @@ struct ItemsHandler {
     Item item;
 };
 
-int main(int, char*[])
+time_t parsedate(char *datestr, int *err)
 {
+    struct tm date = {};
+    struct tm *dateck = NULL;
+    time_t dateepoch = 0;
+    int error = 0;
+    char *endp = strptime(datestr, "%Y-%m-%d", &date);
+
+    if (endp == NULL || *endp != '\0') {
+        error = EINVAL;
+        goto out;
+    }
+
+    dateepoch = timegm(&date);
+    dateck = gmtime(&dateepoch);
+
+    if (!dateck || dateck->tm_year != date.tm_year
+        || dateck->tm_mon != date.tm_mon || dateck->tm_mday != date.tm_mday) {
+        error = EINVAL;
+        goto out;
+    }
+
+out:
+    if (err)
+        *err = error;
+
+    return dateepoch;
+}
+
+int main(int argc, char* argv[])
+{
+    static struct option long_options[] = {
+        { "since",   required_argument,   NULL,   's' },
+        { "until",   required_argument,   NULL,   'u' },
+        { NULL,      0,                   NULL,   0 }
+    };
+
+    int opt;
+    int err;
+    while ((opt = getopt_long(argc, argv, "s:u:",
+                              long_options, NULL)) != EOF) {
+        switch (opt) {
+        case 's': {
+            since = parsedate(optarg, &err);
+            if (err) {
+                fprintf(stderr, "invalid format in --since string\n");
+                exit(1);
+            }
+            break;
+        }
+        case 'u': {
+            until = parsedate(optarg, &err);
+            if (err) {
+                fprintf(stderr, "invalid format in --until string\n");
+                exit(1);
+            }
+            break;
+        }
+
+        default:
+            fprintf(stderr, "usage: hn2mbox [--since=YYYY-MM-DD] [--until=YYY-MM-DD]\n");
+            exit(1);
+        }
+    }
+
     Reader reader;
     char readBuffer[65536];
     FileReadStream is(stdin, readBuffer, sizeof(readBuffer));
