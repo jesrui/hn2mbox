@@ -4,6 +4,7 @@
  * See https://github.com/sytelus/HackerNewsData
  */
 
+#include <algorithm>
 #include <cerrno>
 #include <limits>
 #include <cstdio>
@@ -65,12 +66,14 @@ void dumpItemAsEmail(const Item &item)
            "Content-Type: text/html; charset=utf-8\n",
            item.objectID.c_str(),
            item.author.c_str(), item.author.c_str(),
+           // FIXME: some items have neither title nor story_title
            item.title.empty() ? item.story_title.c_str() : item.title.c_str(),
            datetime);
 
-    if (item.parent_id)
+    if (item.parent_id) { // this is a comment
         printf("In-Reply-To: <%u@hndump>\n", item.parent_id);
-
+        printf("References: <%u@hndump>\n", item.story_id);
+    }
     printf("X-HackerNews-Link: <https://news.ycombinator.com/item?id=%s>\n",
            item.objectID.c_str());
     printf("X-HackerNews-Points: %d\n", item.points);
@@ -79,7 +82,7 @@ void dumpItemAsEmail(const Item &item)
     if (item.story_id)
         printf("X-HackerNews-Story-Link: "
                "<https://news.ycombinator.com/item?id=%u>\n", item.story_id);
-    if (item.story_id == 0)
+    if (item.parent_id == 0) // this is a story
         printf("X-HackerNews-Num-Comments: %u\n", item.num_comments);
 
     // FIXME: We're cheating here because, according to RFC 5332, lines
@@ -159,18 +162,28 @@ struct ItemsHandler {
                 element = objectID;
             return;
         }
+
+        if (element == none)
+            return;
+
+        // minimal string normalization
+        string s = str;
+        replace(s.begin(), s.end(), '\n', ' ');
+        remove(s.begin(), s.end(), '\r');
+
         switch (element) {
-        case created_at:    item.created_at = str;    break;
-        case title:         item.title = str;         break;
-        case url:           item.url = str;           break;
-        case author:        item.author = str;        break;
-        case story_text:    item.story_text = str;    break;
-        case comment_text:  item.comment_text = str;  break;
-        case story_title:   item.story_title = str;   break;
-        case story_url:     item.story_url = str;     break;
-        case objectID:      item.objectID = str;      break;
+        case created_at:    item.created_at = s;    break;
+        case title:         item.title = s;         break;
+        case url:           item.url = s;           break;
+        case author:        item.author = s;        break;
+        case story_text:    item.story_text = s;    break;
+        case comment_text:  item.comment_text = s;  break;
+        case story_title:   item.story_title = s;   break;
+        case story_url:     item.story_url = s;     break;
+        case objectID:      item.objectID = s;      break;
         default:            break;
         }
+
         element = none;
     }
     void StartObject() { ++level; }
