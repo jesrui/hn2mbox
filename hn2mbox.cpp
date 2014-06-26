@@ -6,12 +6,12 @@
 
 #include <algorithm>
 #include <cerrno>
-#include <limits>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <ctime>
 #include <getopt.h>
+#include <limits>
 #include <string>
 #include <unordered_map>
 
@@ -85,6 +85,24 @@ FILE *getFile(struct tm *date)
     return iter->second;
 }
 
+// https://stackoverflow.com/questions/5665231/most-efficient-way-to-escape-xml-html-in-c-string
+string htmlEncode(const string& data)
+{
+    string buffer;
+    buffer.reserve(data.size() * 1.1);
+    for(size_t pos = 0; pos != data.size(); ++pos) {
+        switch(data[pos]) {
+        case '&':  buffer.append("&amp;");       break;
+        case '\"': buffer.append("&quot;");      break;
+        case '\'': buffer.append("&apos;");      break;
+        case '<':  buffer.append("&lt;");        break;
+        case '>':  buffer.append("&gt;");        break;
+        default:   buffer.append(&data[pos], 1); break;
+        }
+    }
+    return buffer;
+}
+
 void dumpItemAsEmail(const Item &item)
 {
     char datestr[100];
@@ -130,10 +148,17 @@ void dumpItemAsEmail(const Item &item)
     // FIXME: We're cheating here because, according to RFC 5332, lines
     // should not be longer than 998 chars. But if we fix that by splitting
     // long lines, then we should escape lines starting with "From "...
-    fprintf(out, "\n"
-            "<html>%s</html>\n"
-            "\n",
-            item.story_text.empty() ? item.comment_text.c_str() : item.story_text.c_str());
+    if (item.parent_id) // this item is a comment
+        fprintf(out, "\n"
+                "<html>%s</html>\n"
+                "\n",
+                item.comment_text.c_str());
+    else
+        fprintf(out, "\n"
+                "<html><a href=\"%s\" rel=\"nofollow\">%s</a><p>%s</html>\n"
+                "\n",
+                item.url.c_str(), htmlEncode(item.url).c_str(),
+                item.story_text.c_str());
 }
 
 template<typename Encoding = UTF8<>>
