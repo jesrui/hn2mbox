@@ -49,7 +49,27 @@ struct Item {
     string story_url;
     unsigned parent_id;
     unsigned created_at_i;
-    string objectID;
+    unsigned objectID;
+
+
+};
+
+enum class Element {
+    none,
+    created_at,
+    title,
+    url,
+    author,
+    points,
+    story_text,
+    comment_text,
+    num_comments,
+    story_id,
+    story_title,
+    story_url,
+    parent_id,
+    created_at_i,
+    objectID,
 };
 
 typedef unordered_map <int, FILE*> Files;
@@ -118,13 +138,13 @@ void dumpItemAsEmail(const Item &item)
         *datestr = '\0';
 
     fprintf(out, "From \n"
-            "Message-ID: <%s@hndump>\n"
+            "Message-ID: <%u@hndump>\n"
             "From: %s <%s@hndump>\n"
             "Subject: %s\n"
             "Date: %s\n"
             "Mime-Version: 1.0\n"
             "Content-Type: text/html; charset=utf-8\n",
-            item.objectID.c_str(),
+            item.objectID,
             item.author.c_str(), item.author.c_str(),
             // FIXME: some items have neither title nor story_title
             item.title.empty() ? item.story_title.c_str() : item.title.c_str(),
@@ -134,8 +154,8 @@ void dumpItemAsEmail(const Item &item)
         fprintf(out, "In-Reply-To: <%u@hndump>\n", item.parent_id);
         fprintf(out, "References: <%u@hndump>\n", item.story_id);
     }
-    fprintf(out, "X-HackerNews-Link: <https://news.ycombinator.com/item?id=%s>\n",
-            item.objectID.c_str());
+    fprintf(out, "X-HackerNews-Link: <https://news.ycombinator.com/item?id=%u>\n",
+            item.objectID);
     fprintf(out, "X-HackerNews-Points: %d\n", item.points);
     if (!item.url.empty())
         fprintf(out, "X-HackerNews-Url: <%s>\n", item.url.c_str());
@@ -165,10 +185,10 @@ template<typename Encoding = UTF8<>>
 struct ItemsHandler {
     typedef typename Encoding::Ch Ch;
 
-    ItemsHandler() : element(none), parent(noparent), level(0), item {} {}
+    ItemsHandler() : element(Element::none), parent(noparent), level(0), item {} {}
 
     void Default() {}
-    void Null() { element = none; }
+    void Null() { element = Element::none; }
     void Bool(bool) { Default(); }
     void Int(int i) { Int64(i); }
     void Uint(unsigned i) { Int64(i); }
@@ -177,15 +197,15 @@ struct ItemsHandler {
         if (parent == _highlightResult)
             return;
         switch (element) {
-        case points:        item.points = i;        break;
-        case num_comments:  item.num_comments = i;  break;
-        case story_id:      item.story_id = i;      break;
-        case parent_id:     item.parent_id = i;     break;
-        case created_at_i:  item.created_at_i = i;  break;
-        default:            break;
+        case Element::points:         item.points = i;        break;
+        case Element::num_comments:   item.num_comments = i;  break;
+        case Element::story_id:       item.story_id = i;      break;
+        case Element::parent_id:      item.parent_id = i;     break;
+        case Element::created_at_i:   item.created_at_i = i;  break;
+        default:                      break;
         }
 
-        element = none;
+        element = Element::none;
     }
     void Uint64(uint64_t) { Default(); }
     void Double(double) { Default(); }
@@ -194,43 +214,43 @@ struct ItemsHandler {
     {
         if (parent == _highlightResult)
             return;
-        if (element == none) {
+        if (element == Element::none) {
             if (strcmp("hits", str) == 0)
                 parent = hits;
             else if (strcmp("_highlightResult", str) == 0)
                 parent = _highlightResult;
             else if (strcmp("created_at", str) == 0)
-                element = created_at;
+                element = Element::created_at;
             else if (strcmp("title", str) == 0)
-                element = title;
+                element = Element::title;
             else if (strcmp("url", str) == 0)
-                element = url;
+                element = Element::url;
             else if (strcmp("author", str) == 0)
-                element = author;
+                element = Element::author;
             else if (strcmp("points", str) == 0)
-                element = points;
+                element = Element::points;
             else if (strcmp("story_text", str) == 0)
-                element = story_text;
+                element = Element::story_text;
             else if (strcmp("comment_text", str) == 0)
-                element = comment_text;
+                element = Element::comment_text;
             else if (strcmp("num_comments", str) == 0)
-                element = num_comments;
+                element = Element::num_comments;
             else if (strcmp("story_id", str) == 0)
-                element = story_id;
+                element = Element::story_id;
             else if (strcmp("story_title", str) == 0)
-                element = story_title;
+                element = Element::story_title;
             else if (strcmp("story_url", str) == 0)
-                element = story_url;
+                element = Element::story_url;
             else if (strcmp("parent_id", str) == 0)
-                element = parent_id;
+                element = Element::parent_id;
             else if (strcmp("created_at_i", str) == 0)
-                element = created_at_i;
+                element = Element::created_at_i;
             else if (strcmp("objectID", str) == 0)
-                element = objectID;
+                element = Element::objectID;
             return;
         }
 
-        if (element == none)
+        if (element == Element::none)
             return;
 
         // minimal string normalization
@@ -239,19 +259,19 @@ struct ItemsHandler {
         remove(s.begin(), s.end(), '\r');
 
         switch (element) {
-        case created_at:    item.created_at = s;    break;
-        case title:         item.title = s;         break;
-        case url:           item.url = s;           break;
-        case author:        item.author = s;        break;
-        case story_text:    item.story_text = s;    break;
-        case comment_text:  item.comment_text = s;  break;
-        case story_title:   item.story_title = s;   break;
-        case story_url:     item.story_url = s;     break;
-        case objectID:      item.objectID = s;      break;
-        default:            break;
+        case Element::created_at:     item.created_at = s;    break;
+        case Element::title:          item.title = s;         break;
+        case Element::url:            item.url = s;           break;
+        case Element::author:         item.author = s;        break;
+        case Element::story_text:     item.story_text = s;    break;
+        case Element::comment_text:   item.comment_text = s;  break;
+        case Element::story_title:    item.story_title = s;   break;
+        case Element::story_url:      item.story_url = s;     break;
+        case Element::objectID:       item.objectID = atoi(s.c_str()); break;
+        default:                      break;
         }
 
-        element = none;
+        element = Element::none;
     }
     void StartObject() { ++level; }
     void EndObject(SizeType)
@@ -265,23 +285,7 @@ struct ItemsHandler {
     void StartArray() { Default(); }
     void EndArray(SizeType) { Default(); }
 
-    enum {
-        none,
-        created_at,
-        title,
-        url,
-        author,
-        points,
-        story_text,
-        comment_text,
-        num_comments,
-        story_id,
-        story_title,
-        story_url,
-        parent_id,
-        created_at_i,
-        objectID,
-    } element;
+    Element element;
     enum {
         noparent,
         hits,
