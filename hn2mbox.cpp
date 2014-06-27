@@ -26,11 +26,16 @@
 using namespace std;
 using namespace rapidjson;
 
+// command line option flags
 enum {
-    FLAG_SPLIT         =  1 << 1,
+    FLAG_SPLIT_MBOX    =  1 << 1,
+    FLAG_DUMP_IDS      =  1 << 2,
 };
 
 int flags;
+// filename containing item ids for the --id-file option
+char *idfile = NULL;
+// --since and --until options
 time_t since = 0;
 time_t until = numeric_limits<time_t>::max();
 
@@ -50,11 +55,11 @@ struct Item {
     unsigned parent_id;
     unsigned created_at_i;
     unsigned objectID;
-
-
 };
 
-enum class Element {
+// the Item field being currently parsed
+enum class Element
+{
     none,
     created_at,
     title,
@@ -74,9 +79,10 @@ enum class Element {
 
 typedef unordered_map <int, FILE*> Files;
 Files outputFiles;
+// get the file to output story or comment data based on the passed date
 FILE *getFile(struct tm *date)
 {
-    if (!(flags & FLAG_SPLIT))
+    if (!(flags & FLAG_SPLIT_MBOX))
         return stdout;
 
     int key = (date->tm_mon & 0xffff) | ((date->tm_year & 0xffff) << 16);
@@ -123,7 +129,9 @@ string htmlEncode(const string& data)
     return buffer;
 }
 
-void dumpItemAsEmail(const Item &item)
+// output item in mbox format
+void dumpItemAsEmail(const Item &item,
+                     const unordered_map<unsigned, unsigned> &item_ids)
 {
     char datestr[100];
     time_t dt = item.created_at_i;
@@ -152,22 +160,31 @@ void dumpItemAsEmail(const Item &item)
 
     if (item.parent_id) { // this item is a comment
         fprintf(out, "In-Reply-To: <%u@hndump>\n", item.parent_id);
-        fprintf(out, "References: <%u@hndump>\n", item.story_id);
+        unsigned parent = item.parent_id;
+        fprintf(out, "References:");
+        while (parent) {
+            fprintf(out, " <%u@hndump>", parent);
+            auto i = item_ids.find(parent);
+            parent = i == item_ids.end() ? 0 : i->second;
+        }
+        fprintf(out, "\n");
     }
-    fprintf(out, "X-HackerNews-Link: <https://news.ycombinator.com/item?id=%u>\n",
+
+    fprintf(out, "X-HackerNews-Link: https://news.ycombinator.com/item?id=%u\n",
             item.objectID);
     fprintf(out, "X-HackerNews-Points: %d\n", item.points);
     if (!item.url.empty())
-        fprintf(out, "X-HackerNews-Url: <%s>\n", item.url.c_str());
+        fprintf(out, "X-HackerNews-Url: %s\n", item.url.c_str());
     if (item.story_id)
         fprintf(out, "X-HackerNews-Story-Link: "
-                "<https://news.ycombinator.com/item?id=%u>\n", item.story_id);
+                "https://news.ycombinator.com/item?id=%u\n", item.story_id);
     if (item.parent_id == 0) // this item is a story
         fprintf(out, "X-HackerNews-Num-Comments: %u\n", item.num_comments);
 
     // FIXME: We're cheating here because, according to RFC 5332, lines
     // should not be longer than 998 chars. But if we fix that by splitting
-    // long lines, then we should escape lines starting with "From "...
+    // long lines, then we should escape lines starting with "From "
+    // (perhaps formatting output as quoted-printable)
     if (item.parent_id) // this item is a comment
         fprintf(out, "\n"
                 "<html>%s</html>\n"
@@ -278,7 +295,7 @@ struct ItemsHandler {
     {
         if (--level == 1) {
             parent = hits;
-            dumpItemAsEmail(item);
+            dumpItemAsEmail(item, item_ids);
             item = {};
         }
     }
@@ -293,6 +310,89 @@ struct ItemsHandler {
     } parent;
     int level;
 
+    Item item;
+    // key: objectID, value: parent_id, used to locate an item in its story
+    // thread
+    unordered_map<unsigned, unsigned> item_ids;
+};
+
+unordered_map<unsigned, unsigned>
+readIdFile(const char *fname)
+{
+    unordered_map<unsigned, unsigned> file_ids;
+    FILE *file = fopen(fname, "r");
+    if (!file) {
+        perror("could not open id file");
+        exit(1);
+    }
+
+    int n;
+    unsigned objectID, parent_id;
+    while ((n = fscanf(file, "%u\t%u", &objectID, &parent_id)) != EOF) {
+        if (n != 2) {
+            fprintf(stderr, "bad format in id file %s\n", fname);
+            exit(1);
+        }
+        file_ids.insert(make_pair(objectID, parent_id));
+    }
+
+    return file_ids;
+}
+
+template<typename Encoding = UTF8<>>
+struct ItemIdsHandler {
+    typedef typename Encoding::Ch Ch;
+
+    ItemIdsHandler() : element(Element::none), level(0), item {} {}
+
+    void Default() {}
+    void Null() { element = Element::none; }
+    void Bool(bool) { Default(); }
+    void Int(int i) { Int64(i); }
+    void Uint(unsigned i) { Int64(i); }
+    void Int64(int64_t i)
+    {
+        if (level > 2)
+            return;
+        switch (element) {
+        case Element::parent_id:   item.parent_id = i;     break;
+        default:                   break;
+        }
+        element = Element::none;
+    }
+    void Uint64(uint64_t) { Default(); }
+    void Double(double) { Default(); }
+
+    void String(const Ch* str, SizeType length, bool copy)
+    {
+        if (level > 2)
+            return;
+        if (element == Element::none) {
+            if (strcmp("parent_id", str) == 0)
+                element = Element::parent_id;
+            else if (strcmp("objectID", str) == 0)
+                element = Element::objectID;
+            return;
+        }
+        switch (element) {
+        case Element::objectID:   item.objectID = atoi(str); break;
+        default:                  break;
+        }
+        element = Element::none;
+    }
+    void StartObject() { ++level; }
+    void EndObject(SizeType)
+    {
+        if (--level == 1) {
+            printf("%u\t%u\n", item.objectID, item.parent_id);
+            item = {};
+        }
+    }
+    void StartArray() { Default(); }
+    void EndArray(SizeType) { Default(); }
+
+    Element element;
+    int level;
     Item item;
 };
 
@@ -328,19 +428,27 @@ out:
 int main(int argc, char* argv[])
 {
     static struct option long_options[] = {
-        { "since",   required_argument,   NULL,   's' },
-        { "until",   required_argument,   NULL,   'u' },
-        { "split",   0,   NULL,   'S' },
-        { NULL,      0,                   NULL,   0 }
+        { "dump-ids",     0,                  NULL,  'd' },
+        { "id-file",      required_argument,  NULL,  'i' },
+        { "split",        0,                  NULL,  'S' },
+        { "since",        required_argument,  NULL,  's' },
+        { "until",        required_argument,  NULL,  'u' },
+        { NULL,           0,                  NULL,  0 }
     };
 
     int opt;
     int err;
-    while ((opt = getopt_long(argc, argv, "s:u:",
+    while ((opt = getopt_long(argc, argv, "di:Ss:u:",
                               long_options, NULL)) != EOF) {
         switch (opt) {
+        case 'd':
+            flags |= FLAG_DUMP_IDS;
+            break;
+        case 'i':
+            idfile = optarg; // FIXME strdup()??
+            break;
         case 'S':
-            flags |= FLAG_SPLIT;
+            flags |= FLAG_SPLIT_MBOX;
             break;
         case 's': {
             since = parsedate(optarg, &err);
@@ -360,7 +468,10 @@ int main(int argc, char* argv[])
         }
 
         default:
-            fprintf(stderr, "usage: hn2mbox [--split] [--since=YYYY-MM-DD] [--until=YYY-MM-DD]\n");
+            fprintf(stderr, "usage:\n"
+                    "\thn2mbox --dump-ids\n"
+                    "\thn2mbox [--id-file=FILE] [--split] "
+                    "[--since=YYYY-MM-DD] [--until=YYY-MM-DD]\n");
             exit(1);
         }
     }
@@ -369,9 +480,19 @@ int main(int argc, char* argv[])
     char readBuffer[65536];
     FileReadStream is(stdin, readBuffer, sizeof(readBuffer));
 
-    ItemsHandler<> handler;
+    bool ok;
+    if (flags & FLAG_DUMP_IDS) {
+        ItemIdsHandler<> handler;
+        ok = reader.Parse<kParseValidateEncodingFlag>(is, handler);
+    } else {
+        ItemsHandler<> handler;
+        if (idfile)
+            handler.item_ids = readIdFile(idfile);
+        printd(" item_ids size %zu\n", handler.item_ids.size());
+        ok = reader.Parse<kParseValidateEncodingFlag>(is, handler);
+    }
 
-    if (!reader.Parse<kParseValidateEncodingFlag>(is, handler)) {
+    if (!ok) {
         fprintf(stderr, "\nError(%u): %s\n",
                 (unsigned)reader.GetErrorOffset(), reader.GetParseError());
         return 1;
