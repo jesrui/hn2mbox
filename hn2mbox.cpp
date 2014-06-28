@@ -12,6 +12,7 @@
 #include <ctime>
 #include <getopt.h>
 #include <limits>
+#include <list>
 #include <string>
 #include <unordered_map>
 
@@ -160,13 +161,18 @@ void dumpItemAsEmail(const Item &item,
 
     if (item.parent_id) { // this item is a comment
         fprintf(out, "In-Reply-To: <%u@hndump>\n", item.parent_id);
-        unsigned parent = item.parent_id;
-        fprintf(out, "References:");
-        while (parent) {
-            fprintf(out, " <%u@hndump>", parent);
-            auto i = item_ids.find(parent);
-            parent = i == item_ids.end() ? 0 : i->second;
+        // https://wiki.mozilla.org/MailNews:Message_Threading
+        list<unsigned> parents;
+        parents.push_front(item.parent_id);
+        while (true) {
+            auto i = item_ids.find(parents.front());
+            if (i == item_ids.end() || i->second == 0)
+                break;
+            parents.push_front(i->second);
         }
+        fprintf(out, "References:");
+        for (auto p : parents)
+            fprintf(out, " <%u@hndump>", p);
         fprintf(out, "\n");
     }
 
